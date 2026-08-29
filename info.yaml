@@ -1,59 +1,65 @@
-#
-# ChipFoundry chipIgnite shuttle metadata — Silicon Dreams Module 3.
-#
-# Learners replace `author` and `discord` before submission. All other
-# fields stay unchanged — they are enforced by the course grading CI.
-#
-
+# Tiny Tapeout project information
 project:
-  title:       "Silicon Dreams · Module 3 · The Summit"
-  description: >-
-    Tape-out finale. Integrates the M2 hardened elevator with a
-    round-robin arbiter, an ICG-based clock gate, and a defensive
-    shim around the adversarial AXIOM black-box IP. Hardens through
-    LibreLane 2025.04 for the ChipFoundry chipIgnite 2026-Q2 shuttle.
-    Final week of CM-HW-101 — ChipMango × ChipFoundry Silicon Dreams.
-  author:      "YOUR NAME HERE"
-  discord:     "YOUR-DISCORD-HANDLE"
-  language:    "Verilog"
-  clock_hz:    100000000
-  tags:
-    - course
-    - silicon-dreams
-    - tape-out
-    - chipignite
-    - sky130
-    - librelane
+  title:        "Silicon Dreams M3"  # ← Shortened to 17 chars
+  author:       "ChipMango"
+  discord:      "@chipmango"
+  description:  "Multi-block elevator system with round-robin arbiter, clock gating, and AXIOM shim for ChipFoundry chipIgnite 2026-Q2 shuttle. CM-HW-101 Silicon Dreams - Module 3 Final Integration."
+  language:     "Verilog"
+  clock_hz:     12000000  # ← Changed to 12 MHz (below 60 MHz limit)
 
+  # How many tiles your design occupies
+  tiles: "1x2"
+
+  # Your top module name - must start with "tt_um_"
+  top_module:  "tt_um_silicon_dreams"
+
+  # List your project's source files here
+  source_files:
+    - "top.v"
+    - "elevator.v"
+    - "elevator_req_port.v"
+    - "arbiter.v"
+    - "clock_gate.v"
+    - "axiom_shim.v"
+    - "reset_synchroniser.v"
+    - "axiom_blackbox.v"
+
+# The pinout of your project
 pinout:
-  ui_in:
-    - "request_strobe"
-    - "requested_floor[0]"
-    - "requested_floor[1]"
-    - "requested_floor[2]"
-    - "requested_floor[3]"
-    - "priority_override_req"
-    - "axiom_enable"
-    - "debug_probe_select"
-  uo_out:
-    - "current_floor[0]"
-    - "current_floor[1]"
-    - "current_floor[2]"
-    - "current_floor[3]"
-    - "state[0]"
-    - "state[1]"
-    - "state[2]"
-    - "door_open"
-  uio:
-    - "fault_inject_enable"
-    - "axiom_misbehaviour_led"
-    - "arbiter_grant_elevator"
-    - "arbiter_grant_axiom"
-    - "reserved"
-    - "reserved"
-    - "clock_gate_active"
-    - "error_led"
+  # Inputs
+  ui[0]: "request_strobe"
+  ui[1]: "requested_floor[0]"
+  ui[2]: "requested_floor[1]"
+  ui[3]: "requested_floor[2]"
+  ui[4]: "requested_floor[3]"
+  ui[5]: "priority_override_req"
+  ui[6]: "axiom_enable"
+  ui[7]: "debug_probe_select"
 
+  # Outputs
+  uo[0]: "current_floor[0]"
+  uo[1]: "current_floor[1]"
+  uo[2]: "current_floor[2]"
+  uo[3]: "current_floor[3]"
+  uo[4]: "state[0]"
+  uo[5]: "state[1]"
+  uo[6]: "state[2]"
+  uo[7]: "door_open"
+
+  # Bidirectional pins
+  uio[0]: "fault_inject_enable"
+  uio[1]: "arbiter_grant_elevator"
+  uio[2]: "arbiter_grant_axiom"
+  uio[3]: "clock_gate_active"
+  uio[4]: "axiom_misbehaviour_led"
+  uio[5]: "reserved"
+  uio[6]: "reserved"
+  uio[7]: "error_led"
+
+# Do not change!
+yaml_version: 6
+
+# Flow configuration
 flow:
   tool:    "librelane"
   version: "2025.04"
@@ -63,6 +69,7 @@ flow:
     width:  161
     height: 225
 
+# Course information
 course:
   code:        "CM-HW-101"
   module:      "M3"
