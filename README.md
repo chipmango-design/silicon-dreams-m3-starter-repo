@@ -1,5 +1,16 @@
 # Silicon Dreams · Module 3 · Tape-out Starter
 
+
+
+[![Lvs](../../workflows/lvs/badge.svg)](../../actions/workflows/lvs.yml)
+[![Drc](../../workflows/drc/badge.svg)](../../actions/workflows/drc.yml)
+[![Timing](../../workflows/timing/badge.svg)](../../actions/workflows/timing.yml)
+[![Docs](../../workflows/docs/badge.svg)](../../actions/workflows/docs.yml)
+[![GDS](../../workflows/gds/badge.svg)](../../actions/workflows/gds.yml)
+[![FPGA](../../workflows/fpga/badge.svg)](../../actions/workflows/fpga.yml)
+[![Test](../../workflows/test/badge.svg)](../../actions/workflows/test.yml)
+
+
 Week 3 of the ChipMango × ChipFoundry Silicon Dreams course (CM-HW-101). This
 starter is where the work you've done in Modules 1 and 2 becomes a real chip.
 By the end of the week you will push a tag called `v1.0.0-final`, upload a
