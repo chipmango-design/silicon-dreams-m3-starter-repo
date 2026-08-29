@@ -1,0 +1,70 @@
+#
+# ChipFoundry chipIgnite shuttle metadata — Silicon Dreams Module 3.
+#
+# Learners replace `author` and `discord` before submission. All other
+# fields stay unchanged — they are enforced by the course grading CI.
+#
+
+project:
+  title:       "Silicon Dreams · Module 3 · The Summit"
+  description: >-
+    Tape-out finale. Integrates the M2 hardened elevator with a
+    round-robin arbiter, an ICG-based clock gate, and a defensive
+    shim around the adversarial AXIOM black-box IP. Hardens through
+    LibreLane 2025.04 for the ChipFoundry chipIgnite 2026-Q2 shuttle.
+    Final week of CM-HW-101 — ChipMango × ChipFoundry Silicon Dreams.
+  author:      "YOUR NAME HERE"
+  discord:     "YOUR-DISCORD-HANDLE"
+  language:    "Verilog"
+  clock_hz:    100000000
+  tags:
+    - course
+    - silicon-dreams
+    - tape-out
+    - chipignite
+    - sky130
+    - librelane
+
+pinout:
+  ui_in:
+    - "request_strobe"
+    - "requested_floor[0]"
+    - "requested_floor[1]"
+    - "requested_floor[2]"
+    - "requested_floor[3]"
+    - "priority_override_req"
+    - "axiom_enable"
+    - "debug_probe_select"
+  uo_out:
+    - "current_floor[0]"
+    - "current_floor[1]"
+    - "current_floor[2]"
+    - "current_floor[3]"
+    - "state[0]"
+    - "state[1]"
+    - "state[2]"
+    - "door_open"
+  uio:
+    - "fault_inject_enable"
+    - "axiom_misbehaviour_led"
+    - "arbiter_grant_elevator"
+    - "arbiter_grant_axiom"
+    - "reserved"
+    - "reserved"
+    - "clock_gate_active"
+    - "error_led"
+
+flow:
+  tool:    "librelane"
+  version: "2025.04"
+  pdk:     "sky130A"
+  scl:     "sky130_fd_sc_hd"
+  die_area_um:
+    width:  161
+    height: 225
+
+course:
+  code:        "CM-HW-101"
+  module:      "M3"
+  cohort:      "2026-spring"
+  partners:    ["ChipMango", "ChipFoundry"]
