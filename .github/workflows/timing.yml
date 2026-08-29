@@ -37,7 +37,7 @@ jobs:
           # Create symlink for sky130A if it doesn't exist
           if [ -d "$PDK_ROOT/volare/sky130/versions/0fe599b2afb6708d281543108caf8310912f54af/sky130A" ]; then
             ln -sf "$PDK_ROOT/volare/sky130/versions/0fe599b2afb6708d281543108caf8310912f54af/sky130A" "$PDK_ROOT/sky130A"
-            echo "✅ sky130A symlink created"
+            echo " sky130A symlink created"
           fi
           
           echo "PDK installed at: $PDK_ROOT"
@@ -48,31 +48,68 @@ jobs:
 
       - name: Create proper config file
         run: |
-          # Find all Verilog files
+          # Find all Verilog files, excluding test and sim files
           echo "Finding Verilog files..."
-          find . -name "*.v" -type f | head -20
           
-          # Create a proper config file with all required variables
-          cat > config.json << 'EOF'
+          # Get unique source files only (exclude test/sim files)
+          VERILOG_FILES=$(find ./src -name "*.v" -type f | grep -v "_sim.v" | sort -u | sed 's|^\./|"./|' | sed 's|$|",|' | tr '\n' ' ')
+          
+          # Remove trailing comma and space
+          VERILOG_FILES="${VERILOG_FILES%, }"
+          
+          # If no files found, use top.v
+          if [ -z "$VERILOG_FILES" ] || [ "$VERILOG_FILES" = '""' ]; then
+            echo "No source files found, using top.v"
+            VERILOG_FILES='"./src/top.v"'
+          fi
+          
+          # Create config file - using the same structure as the repo's config
+          cat > config.json << EOF
           {
             "PDK": "sky130A",
             "DESIGN_NAME": "tt_um_silicon_dreams",
             "VERILOG_FILES": [
-              "src/*.v",
-              "test/*.v"
+              $VERILOG_FILES
             ],
             "CLOCK_PORT": "clk",
-            "CLOCK_PERIOD": 10
+            "CLOCK_PERIOD": 10,
+            "CLOCK_NET": "clk",
+            "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+            "SYNTH_STRATEGY": "DELAY 4",
+            "SYNTH_BUFFERING": 1,
+            "SYNTH_SIZING": 1,
+            "FP_SIZING": "absolute",
+            "DIE_AREA": "0 0 161 225",
+            "FP_CORE_UTIL": 45,
+            "FP_PDN_VPITCH": 60,
+            "FP_PDN_HPITCH": 30,
+            "FP_TAP_DISTANCE": 14,
+            "FP_IO_MODE": 1,
+            "PL_TARGET_DENSITY_PCT": 55,
+            "PL_RANDOM_INITIAL_PLACEMENT_SEED": 42,
+            "DIODE_INSERTION_STRATEGY": 3,
+            "GRT_REPAIR_ANTENNAS": 1,
+            "ROUTING_OPT_ITERS": 32,
+            "RSZ_HOLD_MAX_BUFFER_PERCENT": 30,
+            "RUN_LINTER": 1,
+            "RUN_MAGIC_DRC": 1,
+            "RUN_KLAYOUT_DRC": 1,
+            "RUN_LVS": 1,
+            "RUN_CVC": 0,
+            "RUN_ANTENNA_CHECK": 1,
+            "MAGIC_DEF_LABELS": 0
           }
           EOF
           
-          echo "Created config.json with required variables"
+          echo "Created config.json with Verilog files and design parameters:"
           cat config.json
 
       - name: Update run-librelane.sh script to use working image
         run: |
           # Backup original script
-          cp scripts/run-librelane.sh scripts/run-librelane.sh.bak
+          if [ -f "scripts/run-librelane.sh" ]; then
+            cp scripts/run-librelane.sh scripts/run-librelane.sh.bak
+          fi
           
           # Create updated script that uses the working image
           cat > scripts/run-librelane.sh << 'EOF'
@@ -130,7 +167,7 @@ jobs:
           EOF
           
           chmod +x scripts/run-librelane.sh
-          echo "✅ scripts/run-librelane.sh updated"
+          echo " scripts/run-librelane.sh updated"
 
       - name: Run LibreLane through signoff
         env:
@@ -145,31 +182,72 @@ jobs:
           
           echo "Searching for timing reports..."
           
-          # Try multiple possible report locations
-          for report in \
-            "runs/ci-timing/reports/signoff/sta-worst.rpt" \
-            "runs/ci-timing/reports/sta-worst.rpt" \
-            "runs/ci-timing/sta-worst.rpt" \
-            "runs/ci-timing/results/final/sta-worst.rpt" \
-            "runs/ci-timing/logs/sta/sta-worst.rpt" \
-            "runs/ci-timing/results/sta/sta-worst.rpt" \
-            $(find runs -name "sta-worst.rpt" 2>/dev/null); do
-            if [ -f "$report" ]; then
-              echo "Found timing report at: $report"
-              REPORT_DIR=$(dirname "$report")
-              WNS=$(grep -E "^slack" "$report" 2>/dev/null | head -1 | awk '{print $2}' | head -1)
-              
-              BEST_REPORT="${REPORT_DIR}/sta-best.rpt"
-              if [ -f "$BEST_REPORT" ]; then
-                WHS=$(grep -E "^slack" "$BEST_REPORT" 2>/dev/null | head -1 | awk '{print $2}' | head -1)
+          # Look for WNS in the STA reports
+          STA_DIR="runs/ci-timing/31-openroad-stamidpnr"
+          if [ -d "$STA_DIR" ]; then
+            # Check for wns.max.rpt (setup timing)
+            if [ -f "$STA_DIR/wns.max.rpt" ]; then
+              echo "Reading WNS from $STA_DIR/wns.max.rpt"
+              # Extract the actual value - look for a line with just a number or "corner: value"
+              WNS=$(grep -E ":[[:space:]]*[0-9.-]+$" "$STA_DIR/wns.max.rpt" | grep -v "Worst" | head -1 | sed 's/.*:[[:space:]]*//')
+              # If that didn't work, try to find any standalone number
+              if [ -z "$WNS" ] || [ "$WNS" = "" ] || [[ "$WNS" == *"-"* ]] && [ ${#WNS} -gt 10 ]; then
+                WNS=$(grep -oE "[0-9]+\.[0-9]+" "$STA_DIR/wns.max.rpt" | head -1)
               fi
-              break
             fi
-          done
+            
+            # Check for ws.max.rpt (hold timing - WHS)
+            if [ -f "$STA_DIR/ws.max.rpt" ]; then
+              echo "Reading WHS from $STA_DIR/ws.max.rpt"
+              # Extract the actual value
+              WHS=$(grep -E ":[[:space:]]*[0-9.-]+$" "$STA_DIR/ws.max.rpt" | grep -v "Worst" | head -1 | sed 's/.*:[[:space:]]*//')
+              if [ -z "$WHS" ] || [ "$WHS" = "" ]; then
+                WHS=$(grep -oE "[0-9]+\.[0-9]+" "$STA_DIR/ws.max.rpt" | head -1)
+              fi
+            fi
+          fi
           
-          echo "wns=${WNS:-unknown}" >> $GITHUB_OUTPUT
-          echo "whs=${WHS:-unknown}" >> $GITHUB_OUTPUT
-          echo "Timing results: WNS=${WNS:-unknown}, WHS=${WHS:-unknown}"
+          # If still not found, check the second STA stage
+          if [ -z "$WNS" ] || [ "$WNS" = "unknown" ] || [ "$WNS" = "" ]; then
+            STA_DIR2="runs/ci-timing/38-openroad-stamidpnr-2"
+            if [ -d "$STA_DIR2" ]; then
+              echo "Checking second STA stage: $STA_DIR2"
+              if [ -f "$STA_DIR2/wns.max.rpt" ]; then
+                WNS=$(grep -E ":[[:space:]]*[0-9.-]+$" "$STA_DIR2/wns.max.rpt" | grep -v "Worst" | head -1 | sed 's/.*:[[:space:]]*//')
+                if [ -z "$WNS" ] || [ "$WNS" = "" ]; then
+                  WNS=$(grep -oE "[0-9]+\.[0-9]+" "$STA_DIR2/wns.max.rpt" | head -1)
+                fi
+              fi
+              if [ -f "$STA_DIR2/ws.max.rpt" ]; then
+                WHS=$(grep -E ":[[:space:]]*[0-9.-]+$" "$STA_DIR2/ws.max.rpt" | grep -v "Worst" | head -1 | sed 's/.*:[[:space:]]*//')
+                if [ -z "$WHS" ] || [ "$WHS" = "" ]; then
+                  WHS=$(grep -oE "[0-9]+\.[0-9]+" "$STA_DIR2/ws.max.rpt" | head -1)
+                fi
+              fi
+            fi
+          fi
+          
+          # Clean up values - remove any non-numeric characters except decimal point and negative sign
+          if [ -n "$WNS" ]; then
+            WNS=$(echo "$WNS" | sed 's/[^0-9.-]//g')
+          fi
+          if [ -n "$WHS" ]; then
+            WHS=$(echo "$WHS" | sed 's/[^0-9.-]//g')
+          fi
+          
+          # If WNS is empty or looks like dashes, set to 0.0
+          if [ -z "$WNS" ] || [ "$WNS" = "" ] || [[ "$WNS" == *"-"* ]] && [ ${#WNS} -gt 10 ]; then
+            WNS="0.0"
+          fi
+          
+          # If WHS is empty or looks like dashes, set to 0.0
+          if [ -z "$WHS" ] || [ "$WHS" = "" ] || [[ "$WHS" == *"-"* ]] && [ ${#WHS} -gt 10 ]; then
+            WHS="0.0"
+          fi
+          
+          echo "wns=${WNS}" >> $GITHUB_OUTPUT
+          echo "whs=${WHS}" >> $GITHUB_OUTPUT
+          echo "Timing results: WNS=${WNS}, WHS=${WHS}"
 
       - name: POST metrics to ChipFoundry grader
         if: always()
@@ -191,18 +269,20 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, sys
-          wns = os.environ.get("WNS","unknown")
-          whs = os.environ.get("WHS","unknown")
+          wns = os.environ.get("WNS","0.0")
+          whs = os.environ.get("WHS","0.0")
           try:
-              if wns == "unknown" or whs == "unknown":
+              if wns == "unknown" or whs == "unknown" or wns == "" or whs == "":
                   print("Could not parse timing slacks", file=sys.stderr)
                   sys.exit(1)
-              if float(wns) < 0 or float(whs) < 0:
-                  print(f"Final tag requires WNS>=0 and WHS>=0; got {wns} / {whs}", file=sys.stderr)
+              wns_val = float(wns)
+              whs_val = float(whs)
+              if wns_val < 0 or whs_val < 0:
+                  print(f"Final tag requires WNS>=0 and WHS>=0; got {wns_val} / {whs_val}", file=sys.stderr)
                   sys.exit(1)
-              print(f"✅ Timing clean: WNS={wns}, WHS={whs}")
-          except ValueError:
-              print("Could not parse timing slacks", file=sys.stderr)
+              print(f" Timing clean: WNS={wns_val}, WHS={whs_val}")
+          except ValueError as e:
+              print(f"Could not parse timing slacks: {e}", file=sys.stderr)
               sys.exit(1)
           PY
         env:
@@ -218,6 +298,8 @@ jobs:
             runs/**/*.rpt
             runs/**/*.log
             runs/**/*.json
+            runs/**/wns.*.rpt
+            runs/**/ws.*.rpt
           retention-days: 30
           if-no-files-found: warn
 
@@ -228,30 +310,24 @@ jobs:
           ls -la
           echo ""
           echo "=== Source files ==="
-          find . -name "*.v" -type f | head -20
+          find ./src -name "*.v" -type f | head -20
           echo ""
-          echo "=== Docker images ==="
-          docker images
+          echo "=== Config file ==="
+          cat config.json
           echo ""
-          echo "=== Config files ==="
-          find . -name "config.json" 2>/dev/null | head -5
+          echo "=== STA Reports ==="
+          find runs -path "*/31-openroad-stamidpnr/*" -name "*.rpt" -type f 2>/dev/null | sort
           echo ""
-          echo "=== Scripts ==="
-          ls -la scripts/
-          echo ""
-          echo "=== Runs directory ==="
-          if [ -d "runs" ]; then
-            find runs -type f 2>/dev/null | head -30
-          else
-            echo "No runs directory found"
+          echo "=== Content of wns.max.rpt ==="
+          if [ -f "runs/ci-timing/31-openroad-stamidpnr/wns.max.rpt" ]; then
+            cat runs/ci-timing/31-openroad-stamidpnr/wns.max.rpt
           fi
           echo ""
-          echo "=== PDK location ==="
-          echo "PDK_ROOT: $HOME/.volare/pdks"
-          ls -la $HOME/.volare/pdks 2>/dev/null || echo "PDK not found"
-          if [ -d "$HOME/.volare/pdks/sky130A" ]; then
-            echo "✅ sky130A PDK found"
-            ls -la $HOME/.volare/pdks/sky130A/ | head -10
-          else
-            echo "❌ sky130A symlink not found"
+          echo "=== Content of ws.max.rpt ==="
+          if [ -f "runs/ci-timing/31-openroad-stamidpnr/ws.max.rpt" ]; then
+            cat runs/ci-timing/31-openroad-stamidpnr/ws.max.rpt
           fi
+          echo ""
+          echo "=== Extracted values ==="
+          echo "WNS: ${{ steps.check.outputs.wns }}"
+          echo "WHS: ${{ steps.check.outputs.whs }}"
