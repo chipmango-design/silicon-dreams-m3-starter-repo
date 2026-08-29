@@ -1,0 +1,257 @@
+name: timing
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  timing:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip python3-venv python3-tk git make wget xvfb
+          python3 -m pip install --upgrade pip
+
+      - name: Install OpenLane and volare
+        run: |
+          python3 -m pip install openlane volare
+
+      - name: Install PDK using volare
+        run: |
+          mkdir -p $HOME/.volare/pdks
+          export PDK_ROOT=$HOME/.volare/pdks
+          echo "PDK_ROOT=$PDK_ROOT" >> $GITHUB_ENV
+          
+          python3 -m volare enable \
+            0fe599b2afb6708d281543108caf8310912f54af \
+            --pdk-root $PDK_ROOT \
+            --pdk sky130
+          
+          # Create symlink for sky130A if it doesn't exist
+          if [ -d "$PDK_ROOT/volare/sky130/versions/0fe599b2afb6708d281543108caf8310912f54af/sky130A" ]; then
+            ln -sf "$PDK_ROOT/volare/sky130/versions/0fe599b2afb6708d281543108caf8310912f54af/sky130A" "$PDK_ROOT/sky130A"
+            echo "✅ sky130A symlink created"
+          fi
+          
+          echo "PDK installed at: $PDK_ROOT"
+          ls -la $PDK_ROOT
+
+      - name: Pull LibreLane image
+        run: docker pull ghcr.io/librelane/librelane:3.0.10
+
+      - name: Create proper config file
+        run: |
+          # Find all Verilog files
+          echo "Finding Verilog files..."
+          find . -name "*.v" -type f | head -20
+          
+          # Create a proper config file with all required variables
+          cat > config.json << 'EOF'
+          {
+            "PDK": "sky130A",
+            "DESIGN_NAME": "tt_um_silicon_dreams",
+            "VERILOG_FILES": [
+              "src/*.v",
+              "test/*.v"
+            ],
+            "CLOCK_PORT": "clk",
+            "CLOCK_PERIOD": 10
+          }
+          EOF
+          
+          echo "Created config.json with required variables"
+          cat config.json
+
+      - name: Update run-librelane.sh script to use working image
+        run: |
+          # Backup original script
+          cp scripts/run-librelane.sh scripts/run-librelane.sh.bak
+          
+          # Create updated script that uses the working image
+          cat > scripts/run-librelane.sh << 'EOF'
+          #!/usr/bin/env bash
+          # Silicon Dreams · Module 3 · LibreLane wrapper.
+          set -euo pipefail
+
+          PDK_ROOT="${PDK_ROOT:-$HOME/.volare/pdks}"
+          TAG=""
+          VERSION_CHECK_ONLY=0
+
+          while [[ $# -gt 0 ]]; do
+            case "$1" in
+              --tag)            TAG="$2"; shift 2 ;;
+              --version-check)  VERSION_CHECK_ONLY=1; shift ;;
+              *) echo "Unknown arg: $1" >&2; exit 2 ;;
+            esac
+          done
+
+          # Use config.json in root directory
+          CONFIG_JSON="config.json"
+
+          if [[ ! -f "$CONFIG_JSON" ]]; then
+            echo "Error: config.json not found." >&2
+            exit 1
+          fi
+
+          if [[ "$VERSION_CHECK_ONLY" -eq 1 ]]; then
+            echo "OK: LibreLane ready."
+            exit 0
+          fi
+
+          if [[ -z "$TAG" ]]; then
+            TAG="ci-timing"
+          fi
+
+          echo "==> LibreLane  ·  tag=$TAG"
+          echo "==> PDK_ROOT: $PDK_ROOT"
+          echo "==> Using config: $CONFIG_JSON"
+
+          # Run LibreLane signoff with the correct image
+          docker run --rm \
+            -v $(pwd):/workspace \
+            -v "$PDK_ROOT":/pdk \
+            -e PDK_ROOT=/pdk \
+            -w /workspace \
+            ghcr.io/librelane/librelane:3.0.10 \
+            python3 -m librelane \
+              --pdk-root /pdk \
+              --run-tag "$TAG" \
+              --docker-no-tty \
+              "$CONFIG_JSON"
+
+          echo "==> Done. Reports under runs/$TAG/reports/"
+          EOF
+          
+          chmod +x scripts/run-librelane.sh
+          echo "✅ scripts/run-librelane.sh updated"
+
+      - name: Run LibreLane through signoff
+        env:
+          PDK_ROOT: /home/runner/.volare/pdks
+        run: ./scripts/run-librelane.sh --tag ci-timing
+
+      - name: Extract WNS/WHS
+        id: check
+        run: |
+          WNS="unknown"
+          WHS="unknown"
+          
+          echo "Searching for timing reports..."
+          
+          # Try multiple possible report locations
+          for report in \
+            "runs/ci-timing/reports/signoff/sta-worst.rpt" \
+            "runs/ci-timing/reports/sta-worst.rpt" \
+            "runs/ci-timing/sta-worst.rpt" \
+            "runs/ci-timing/results/final/sta-worst.rpt" \
+            "runs/ci-timing/logs/sta/sta-worst.rpt" \
+            "runs/ci-timing/results/sta/sta-worst.rpt" \
+            $(find runs -name "sta-worst.rpt" 2>/dev/null); do
+            if [ -f "$report" ]; then
+              echo "Found timing report at: $report"
+              REPORT_DIR=$(dirname "$report")
+              WNS=$(grep -E "^slack" "$report" 2>/dev/null | head -1 | awk '{print $2}' | head -1)
+              
+              BEST_REPORT="${REPORT_DIR}/sta-best.rpt"
+              if [ -f "$BEST_REPORT" ]; then
+                WHS=$(grep -E "^slack" "$BEST_REPORT" 2>/dev/null | head -1 | awk '{print $2}' | head -1)
+              fi
+              break
+            fi
+          done
+          
+          echo "wns=${WNS:-unknown}" >> $GITHUB_OUTPUT
+          echo "whs=${WHS:-unknown}" >> $GITHUB_OUTPUT
+          echo "Timing results: WNS=${WNS:-unknown}, WHS=${WHS:-unknown}"
+
+      - name: POST metrics to ChipFoundry grader
+        if: always()
+        env:
+          CHIPFOUNDRY_TOKEN: ${{ secrets.CHIPFOUNDRY_TOKEN }}
+        run: |
+          if [ -n "$CHIPFOUNDRY_TOKEN" ]; then
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $CHIPFOUNDRY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"workflow\":\"timing\",\"tag\":\"${GITHUB_REF_NAME}\",\"sha\":\"${GITHUB_SHA}\",\"wns\":\"${{ steps.check.outputs.wns }}\",\"whs\":\"${{ steps.check.outputs.whs }}\"}" \
+              https://grader.chipfoundry.io/v1/silicon-dreams/m3 || true
+          else
+            echo "CHIPFOUNDRY_TOKEN not set, skipping metrics post"
+          fi
+
+      - name: Fail if final tag and timing not clean
+        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-final')
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          wns = os.environ.get("WNS","unknown")
+          whs = os.environ.get("WHS","unknown")
+          try:
+              if wns == "unknown" or whs == "unknown":
+                  print("Could not parse timing slacks", file=sys.stderr)
+                  sys.exit(1)
+              if float(wns) < 0 or float(whs) < 0:
+                  print(f"Final tag requires WNS>=0 and WHS>=0; got {wns} / {whs}", file=sys.stderr)
+                  sys.exit(1)
+              print(f"✅ Timing clean: WNS={wns}, WHS={whs}")
+          except ValueError:
+              print("Could not parse timing slacks", file=sys.stderr)
+              sys.exit(1)
+          PY
+        env:
+          WNS: ${{ steps.check.outputs.wns }}
+          WHS: ${{ steps.check.outputs.whs }}
+
+      - name: Upload timing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-reports
+          path: |
+            runs/**/*.rpt
+            runs/**/*.log
+            runs/**/*.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Debug - List directory structure
+        if: always()
+        run: |
+          echo "=== Workspace contents ==="
+          ls -la
+          echo ""
+          echo "=== Source files ==="
+          find . -name "*.v" -type f | head -20
+          echo ""
+          echo "=== Docker images ==="
+          docker images
+          echo ""
+          echo "=== Config files ==="
+          find . -name "config.json" 2>/dev/null | head -5
+          echo ""
+          echo "=== Scripts ==="
+          ls -la scripts/
+          echo ""
+          echo "=== Runs directory ==="
+          if [ -d "runs" ]; then
+            find runs -type f 2>/dev/null | head -30
+          else
+            echo "No runs directory found"
+          fi
+          echo ""
+          echo "=== PDK location ==="
+          echo "PDK_ROOT: $HOME/.volare/pdks"
+          ls -la $HOME/.volare/pdks 2>/dev/null || echo "PDK not found"
+          if [ -d "$HOME/.volare/pdks/sky130A" ]; then
+            echo "✅ sky130A PDK found"
+            ls -la $HOME/.volare/pdks/sky130A/ | head -10
+          else
+            echo "❌ sky130A symlink not found"
+          fi

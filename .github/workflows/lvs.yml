@@ -1,0 +1,57 @@
+name: lvs
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lvs:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull LibreLane image
+        run: docker pull efabless/librelane:2025.04
+
+      - name: Install PDK
+        run: |
+          mkdir -p $HOME/.volare/pdks
+          ./scripts/install-pdk.sh
+
+      - name: Run LibreLane through LVS
+        env:
+          PDK_ROOT: /home/runner/.volare/pdks
+        run: ./scripts/run-librelane.sh --tag ci-lvs
+
+      - name: Check LVS result
+        id: check
+        run: |
+          RPT=runs/ci-lvs/reports/signoff/lvs.rpt
+          if grep -q "Circuits match: MATCH" "$RPT"; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          else
+            echo "match=false" >> $GITHUB_OUTPUT
+            echo "::warning::LVS not matching (not fatal during iteration)"
+          fi
+
+      - name: POST metrics to ChipFoundry grader
+        if: always()
+        env:
+          CHIPFOUNDRY_TOKEN: ${{ secrets.CHIPFOUNDRY_TOKEN }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $CHIPFOUNDRY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"workflow\":\"lvs\",\"tag\":\"${GITHUB_REF_NAME}\",\"sha\":\"${GITHUB_SHA}\",\"match\":\"${{ steps.check.outputs.match }}\"}" \
+            https://grader.chipfoundry.io/v1/silicon-dreams/m3 || true
+
+      - name: Fail if final tag and LVS not matching
+        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-final')
+        run: |
+          if [[ "${{ steps.check.outputs.match }}" != "true" ]]; then
+            echo "Final tag requires LVS match." >&2
+            exit 1
+          fi

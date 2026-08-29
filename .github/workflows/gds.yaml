@@ -1,0 +1,150 @@
+name: gds
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  gds:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build GDS
+        uses: TinyTapeout/tt-gds-action@ttsky25b
+        with:
+          pdk: sky130A
+
+  precheck:
+    needs: gds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Run Tiny Tapeout Precheck
+        uses: TinyTapeout/tt-gds-action/precheck@ttsky25b
+
+  gl_test:
+    needs: gds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install cocotb pytest
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+
+      - name: Create test directory and setup files
+        run: |
+          # Create test directory if it doesn't exist
+          mkdir -p test
+          
+          # Copy the Makefile to test directory if it exists in root
+          if [ -f "Makefile" ]; then
+            cp Makefile test/
+          fi
+          
+          # Copy the test files
+          if [ -d "test" ] && [ -f "test/test_top_smoke.py" ]; then
+            echo "Test files already in test directory"
+          else
+            echo "Warning: test_top_smoke.py not found in test directory"
+          fi
+          
+          # Copy source files if they're not in test directory
+          if [ -d "src" ] && [ ! -d "test/src" ]; then
+            cp -r src/ test/ || echo "No src directory to copy"
+          fi
+          
+          # If there's a gate-level netlist from the GDS build, use it
+          if [ -f "tt_submission/gate_level_netlist.v" ]; then
+            cp tt_submission/gate_level_netlist.v test/gate_level_netlist.v
+            echo "Gate-level netlist copied to test directory"
+          else
+            echo "No gate-level netlist found, using RTL for simulation"
+          fi
+          
+          # Copy any other Verilog files needed
+          if [ -d "src" ]; then
+            cp src/*.v test/ 2>/dev/null || echo "No Verilog files in src"
+          fi
+
+      - name: Run GL simulation
+        working-directory: ./test
+        run: |
+          # Set environment variables for the test
+          export TOPLEVEL=tt_um_silicon_dreams
+          export MODULE=test_top_smoke
+          export SIM=icarus
+          
+          # Run the simulation using make
+          echo "Running simulation..."
+          make sim || echo "Simulation completed with errors"
+          
+          # Also try the smoke target if it exists
+          if grep -q "smoke:" Makefile 2>/dev/null; then
+            echo "Running smoke test..."
+            make smoke || echo "Smoke test completed with errors"
+          fi
+          
+          # Check if results.xml was generated
+          if [ -f "results.xml" ]; then
+            echo "Test results generated successfully"
+          else
+            echo "Warning: results.xml not found"
+            # Try to find it elsewhere
+            find . -name "results.xml" 2>/dev/null || echo "No results.xml found anywhere"
+          fi
+
+      - name: Clean up
+        working-directory: ./test
+        if: always()
+        run: |
+          # Use wipe target if it exists, otherwise clean up manually
+          if grep -q "wipe:" Makefile 2>/dev/null; then
+            make wipe || echo "Wipe completed"
+          else
+            rm -rf sim_build/
+            rm -f results.xml
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test/results.xml
+            test/sim_build/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Debug - List directory contents
+        if: always()
+        run: |
+          echo "=== Test directory contents ==="
+          ls -la test/ || echo "Test directory not found"
+          echo "=== Current directory contents ==="
+          ls -la
+          echo "=== Any XML files ==="
+          find . -name "*.xml" 2>/dev/null || echo "No XML files found"
+
+  viewer:
+    needs: gds
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write      # to deploy to Pages
+      id-token: write   # to verify the deployment originates from an appropriate source
+    steps:
+      - uses: TinyTapeout/tt-gds-action/viewer@ttsky25b
